@@ -25,7 +25,7 @@ from dbt_core_interface.generic_tests import (  # noqa: F401
 from dbt_core_interface.naming_enforcer import (  # noqa: F401
     LayerPattern,
     ModelLayer,
-    NamingConvention,
+    NamingConvention as ModelNamingConvention,
     NamingEnforcer,
     NamingSuggestion,
     NamingViolation,

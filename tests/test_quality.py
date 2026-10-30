@@ -2,11 +2,9 @@
 # pyright: reportDeprecated=false,reportPrivateImportUsage=false,reportAny=false,reportUnknownMemberType=false,reportUnknownVariableType=false
 """Tests for the quality monitoring module."""
 
-from unittest.mock import MagicMock, patch
 import pytest
 
 from dbt_core_interface.quality import (
-    AlertChannel,
     CheckStatus,
     ConsoleAlertChannel,
     CustomSqlCheck,

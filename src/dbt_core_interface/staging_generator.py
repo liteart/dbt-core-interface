@@ -17,7 +17,7 @@ from enum import Enum
 from string import Template
 
 if t.TYPE_CHECKING:
-    from dbt.contracts.graph.nodes import ManifestNode, SourceDefinition
+    from dbt.contracts.graph.nodes import SourceDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,7 @@ ${column_tests}
 
         Args:
             config: Configuration for staging model generation
+
         """
         self.config = config or StagingModelConfig()
 
@@ -129,6 +130,7 @@ ${column_tests}
                 - model_sql: Generated SQL model
                 - schema_yml: Generated YAML schema
                 - column_mappings: List of column mappings
+
         """
         # Extract source info
         source_name = source.source_name
@@ -345,8 +347,6 @@ ${column_tests}
         column_mappings: list[ColumnMapping],
     ) -> str:
         """Generate YAML schema for the staging model."""
-        lines: list[str] = []
-
         # Description
         description = f"Staging model for {source_name}.{table_name}"
 
@@ -418,6 +418,7 @@ def generate_staging_model_from_source(
 
     Returns:
         Dictionary with generated model and schema
+
     """
     generator = StagingGenerator(config)
     return generator.generate_from_source(source, manifest)

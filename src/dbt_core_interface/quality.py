@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import math
+import re
 import typing as t
 import uuid
 from abc import ABC, abstractmethod
@@ -27,6 +29,24 @@ from dbt_core_interface.project import DbtProject
 def _raise_required(field_name: str) -> t.NoReturn:
     """Raise an error for required fields in dataclass inheritance."""
     raise TypeError(f"__init__ missing required argument: '{field_name}'")
+
+
+def _safe_quality_column(name: str) -> str:
+    """Accept simple identifiers only; arbitrary expressions belong in custom SQL."""
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
+        raise ValueError(f"Unsafe quality-check column name: {name!r}")
+    return name
+
+
+def _safe_quality_number(value: float | int) -> float | int:
+    """Require finite numerical bounds before including them in SQL."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or (isinstance(value, float) and not math.isfinite(value))
+    ):
+        raise ValueError(f"Unsafe quality-check numeric bound: {value!r}")
+    return value
 
 
 __all__ = [
@@ -251,10 +271,12 @@ class WebhookAlertChannel(AlertChannel):
                 verify=self.verify_ssl,
             )
             response.raise_for_status()
-            logger.debug(f"Webhook alert sent successfully to {self.url}")
+            logger.debug("Webhook alert sent successfully")
             return True
         except Exception as e:
-            logger.error(f"Failed to send webhook alert to {self.url}: {e}")
+            # Webhook URLs frequently embed credentials. HTTP exceptions can
+            # include the full URL or request data, so log only the error type.
+            logger.error("Failed to send webhook alert (%s)", type(e).__name__)
             return False
 
     def close(self) -> None:
@@ -379,7 +401,7 @@ class RowCountCheck(QualityCheck):
 
     def get_sql(self, model_name: str) -> str:
         """Get the SQL for row count check."""
-        return f"SELECT COUNT(*) AS row_count FROM {{{{ ref('{model_name}') }}}}"  # noqa: S608
+        return f"SELECT COUNT(*) AS row_count FROM {{{{ ref({model_name!r}) }}}}"  # noqa: S608
 
 
 @dataclass
@@ -442,10 +464,11 @@ class NullPercentageCheck(QualityCheck):
 
     def get_sql(self, model_name: str) -> str:  # noqa: S608
         """Get the SQL for null percentage check."""
-        return f"""  # noqa: S608
+        column = _safe_quality_column(self.column_name)
+        return f"""
         SELECT
-            100.0 * COUNT(NULLIF({self.column_name}, NULL)) / NULLIF(COUNT(*), 0) AS null_percentage
-        FROM {{{{ ref('{model_name}') }}}}
+            100.0 * (COUNT(*) - COUNT({column})) / NULLIF(COUNT(*), 0) AS null_percentage
+        FROM {{{{ ref({model_name!r}) }}}}
         """  # noqa: S608
 
 
@@ -509,8 +532,10 @@ class DuplicateCheck(QualityCheck):
 
     def get_sql(self, model_name: str) -> str:  # noqa: S608
         """Get the SQL for duplicate check."""
-        cols = ", ".join(self.columns)
-        return f"""  # noqa: S608
+        if not self.columns:
+            raise ValueError("At least one quality-check column is required")
+        cols = ", ".join(_safe_quality_column(column) for column in self.columns)
+        return f"""
         SELECT
             100.0 * SUM(duplicate_count) / NULLIF(SUM(total_count), 0) AS duplicate_percentage
         FROM (
@@ -518,16 +543,9 @@ class DuplicateCheck(QualityCheck):
                 {cols},
                 COUNT(*) - 1 AS duplicate_count,
                 COUNT(*) AS total_count
-            FROM {{{{ ref('{model_name}') }}}}
+            FROM {{{{ ref({model_name!r}) }}}}
             GROUP BY {cols}
-            HAVING COUNT(*) > 1
         ) duplicates
-        COALESCE(
-            (SELECT 0 FROM (SELECT 1) WHERE NOT EXISTS (
-                SELECT 1 FROM {{{{ ref('{model_name}') }}}} GROUP BY {cols} HAVING COUNT(*) > 1
-            )),
-            0
-        )
         """  # noqa: S608
 
 
@@ -599,15 +617,16 @@ class ValueRangeCheck(QualityCheck):
 
     def get_sql(self, model_name: str) -> str:  # noqa: S608
         """Get the SQL for value range check."""
+        column = _safe_quality_column(self.column_name)
         conditions = []
         if self.min_value is not None:
-            conditions.append(f"{self.column_name} < {self.min_value}")
+            conditions.append(f"{column} < {_safe_quality_number(self.min_value)}")
         if self.max_value is not None:
-            conditions.append(f"{self.column_name} > {self.max_value}")
+            conditions.append(f"{column} > {_safe_quality_number(self.max_value)}")
 
         where_clause = " OR ".join(conditions)
-        return f"""  # noqa: S608
-        SELECT COUNT(*) FROM {{{{ ref('{model_name}') }}}}
+        return f"""
+        SELECT COUNT(*) FROM {{{{ ref({model_name!r}) }}}}
         WHERE {where_clause}
         LIMIT 1
         """  # noqa: S608

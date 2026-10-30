@@ -366,6 +366,7 @@ class DbtInterfaceClient:
 
         Returns:
             Dict with 'result' key containing the YAML string.
+
         """
         params: dict[str, t.Any] = {"source_name": source_name, "strategy": strategy}
         if schema:

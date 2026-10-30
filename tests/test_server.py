@@ -4,34 +4,33 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import BaseModel
 
+from dbt_core_interface.project import ExecutionResult
+from dbt_core_interface.quality import QualityCheckType, Severity
 from dbt_core_interface.server import (
     DISABLE_AUTOLOAD,
     STATE_FILE,
-    ServerErrorCode,
-    ServerError,
-    ServerErrorContainer,
-    ServerRunResult,
     ServerCompileResult,
+    ServerError,
+    ServerErrorCode,
+    ServerErrorContainer,
     ServerRegisterResult,
-    ServerUnregisterResult,
     ServerResetResult,
-    _get_state_file_path,
-    _format_run_result,
+    ServerRunResult,
+    ServerUnregisterResult,
     _create_error_response,
+    _format_run_result,
     _get_container,
+    _get_state_file_path,
     _load_saved_state,
     _save_state,
     app,
 )
-from dbt_core_interface.project import ExecutionResult
-from dbt_core_interface.quality import QualityCheckType, Severity
 
 
 @pytest.fixture
@@ -541,3 +540,91 @@ class TestAppConfiguration:
     def test_app_has_openapi(self):
         """Test that OpenAPI schema is available."""
         assert app.openapi_schema is not None or app.openapi() is not None
+
+
+def test_source_generation_accepts_schema_field(client, mock_runner):
+    """Keep the public JSON schema key while avoiding Pydantic's method name."""
+    mock_runner.generate_sources.return_value = "version: 2\n"
+    response = client.post("/api/v1/generate-sources", json={"schema": "analytics"})
+    assert response.status_code == 200
+    assert mock_runner.generate_sources.call_args.kwargs["schema"] == "analytics"
+
+
+def test_performance_record_accepts_schema_field(client, mock_runner):
+    """The performance API must continue to accept the schema JSON key."""
+    mock_runner.performance_profiler.record_metric.return_value.to_dict.return_value = {"ok": True}
+    response = client.post(
+        "/api/v1/performance/record",
+        json={
+            "model_name": "orders",
+            "model_unique_id": "model.demo.orders",
+            "execution_time_ms": 1.0,
+            "schema": "analytics",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert mock_runner.performance_profiler.record_metric.call_args.kwargs["schema"] == "analytics"
+
+
+def test_cross_origin_sql_request_is_blocked_but_non_browser_client_works(client, mock_runner):
+    """A foreign browser origin cannot trigger the SQL endpoint."""
+    mock_runner.generate_runtime_model_context.return_value = {
+        "compiled_code": "select 1",
+        "config": {"sql_header": ""},
+    }
+    mock_runner.adapter.execute_macro.return_value = "select 1"
+    mock_runner.execute_sql.return_value = SimpleNamespace(
+        table=SimpleNamespace(rows=[], column_names=[]),
+        raw_code="select 1",
+        compiled_code="select 1",
+    )
+    response = client.post(
+        "/api/v1/run",
+        content="select 1",
+        headers={"origin": "https://untrusted.example", "content-type": "text/plain"},
+    )
+    assert response.status_code == 403
+    mock_runner.execute_sql.assert_not_called()
+    response = client.post(
+        "/api/v1/run", content="select 1", headers={"content-type": "text/plain"}
+    )
+    assert response.status_code == 200, response.text
+    mock_runner.execute_sql.assert_called_once()
+
+
+def test_cross_site_request_without_origin_is_blocked(client):
+    """Fetch metadata also protects cross-site browser GET requests."""
+    response = client.get("/api/v1/heartbeat", headers={"sec-fetch-site": "cross-site"})
+    assert response.status_code == 403
+
+
+def test_rebound_non_loopback_same_origin_is_blocked(client):
+    """An attacker-controlled hostname must not become trusted by matching Host."""
+    response = client.get(
+        "/api/v1/heartbeat",
+        headers={"host": "attacker.example:8581", "origin": "http://attacker.example:8581"},
+    )
+    assert response.status_code == 403
+
+
+def test_loopback_same_origin_is_allowed(mock_container):
+    """The local API documentation can use same-origin browser requests."""
+    app.dependency_overrides[_get_container] = lambda: mock_container
+    try:
+        with TestClient(app, base_url="http://127.0.0.1:8581") as local_client:
+            response = local_client.get(
+                "/api/v1/heartbeat", headers={"origin": "http://127.0.0.1:8581"}
+            )
+        assert response.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_explicitly_configured_browser_origin_is_allowed(client, monkeypatch):
+    """A trusted remote browser origin must be explicitly configured."""
+    monkeypatch.setenv("DBT_CORE_INTERFACE_ALLOWED_ORIGINS", "https://trusted.example")
+    response = client.get(
+        "/api/v1/heartbeat",
+        headers={"origin": "https://trusted.example", "sec-fetch-site": "cross-site"},
+    )
+    assert response.status_code == 200

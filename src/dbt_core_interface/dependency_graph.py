@@ -25,6 +25,11 @@ if t.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _escape_dot_string(value: str) -> str:
+    """Represent a value inside a quoted DOT string without creating syntax."""
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+
+
 class GraphDirection(Enum):
     """Graph layout direction."""
 
@@ -94,8 +99,8 @@ class GraphEdge:
     def to_dot(self) -> str:
         """Convert edge to DOT format."""
         # Escape special characters in unique_id
-        escaped_source = self.source.replace('"', '\\"')
-        escaped_target = self.target.replace('"', '\\"')
+        escaped_source = _escape_dot_string(self.source)
+        escaped_target = _escape_dot_string(self.target)
         return f'  "{escaped_source}" -> "{escaped_target}";'
 
 
@@ -119,6 +124,7 @@ class DependencyGraph:
             direction="downstream"
         )
         graph.render_png("output.png")
+
     """
 
     nodes: dict[str, GraphNode] = field(default_factory=dict)
@@ -174,9 +180,9 @@ class DependencyGraph:
             center_node_id: The unique_id of the center node
             depth: Maximum depth from center node (0 = center node only)
             direction: Which direction to traverse
+
         """
         included: set[str] = {center_node_id}
-        current_depth = 0
 
         def traverse(node_ids: set[str], current_depth: int, direction: str) -> None:
             if current_depth >= depth:
@@ -219,20 +225,22 @@ class DependencyGraph:
 
         Returns:
             DOT format string representation of the graph
+
         """
         lines = [
             "digraph dbt_dependency_graph {",
             f"  rankdir={self.direction.value};",
-            f'  node [shape=box, style=rounded, fontname="Arial", fontsize=10];',
-            f'  edge [fontname="Arial", fontsize=9, color="#718096"];',
+            '  node [shape=box, style=rounded, fontname="Arial", fontsize=10];',
+            '  edge [fontname="Arial", fontsize=9, color="#718096"];',
             "",
         ]
 
         # Add nodes
         for node in self.nodes.values():
-            escaped_id = node.unique_id.replace('"', '\\"')
+            escaped_id = _escape_dot_string(node.unique_id)
+            escaped_label = _escape_dot_string(node.label)
             lines.append(
-                f'  "{escaped_id}" [label="{node.label}", '
+                f'  "{escaped_id}" [label="{escaped_label}", '
                 f'fillcolor="{node.color}", style="filled,rounded"];'
             )
 
@@ -261,6 +269,7 @@ class DependencyGraph:
 
         Raises:
             RuntimeError: If graphviz is not installed
+
         """
         output_path = Path(output_path)
         if not output_path.suffix:
@@ -308,6 +317,7 @@ class DependencyGraph:
 
         Returns:
             Path to the rendered SVG file
+
         """
         return self._render_with_graphviz(output_path, GraphFormat.SVG)
 
@@ -319,6 +329,7 @@ class DependencyGraph:
 
         Returns:
             Path to the rendered PNG file
+
         """
         return self._render_with_graphviz(output_path, GraphFormat.PNG)
 
@@ -330,6 +341,7 @@ class DependencyGraph:
 
         Returns:
             Path to the rendered PDF file
+
         """
         return self._render_with_graphviz(output_path, GraphFormat.PDF)
 
@@ -341,6 +353,7 @@ class DependencyGraph:
 
         Returns:
             Path to the saved DOT file
+
         """
         output_path = Path(output_path)
         if not output_path.suffix or output_path.suffix != ".dot":
@@ -369,6 +382,7 @@ class DependencyGraph:
 
         Returns:
             DependencyGraph instance populated from manifest
+
         """
         graph = cls(direction=direction)
         resource_types = resource_types or ["model", "source", "snapshot"]
@@ -431,6 +445,7 @@ class DependencyGraph:
 
         Returns:
             Dictionary with graph statistics
+
         """
         resource_counts: dict[str, int] = {}
         for node in self.nodes.values():

@@ -10,15 +10,41 @@ with proper column names, descriptions, and data types.
 from __future__ import annotations
 
 import logging
+import re
 import typing as t
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
+from pathlib import Path  # noqa: F401 - retained for compatibility
+
+import yaml
 
 from dbt_core_interface.project import DbtProject
 
-
 logger = logging.getLogger(__name__)
+
+
+def _safe_sql_literal_value(value: str) -> str:
+    """Reject characters that can escape literals across supported SQL dialects."""
+    if not isinstance(value, str) or any(
+        char in "'\\" or ord(char) < 32 or ord(char) == 127 for char in value
+    ):
+        raise ValueError(f"Unsafe value for source introspection: {value!r}")
+    return value
+
+
+def _safe_sql_identifier(value: str, *, allow_hyphen: bool = False) -> str:
+    """Allow only simple unquoted identifiers used in metadata queries."""
+    pattern = r"[A-Za-z_][A-Za-z0-9_$-]*" if allow_hyphen else r"[A-Za-z_][A-Za-z0-9_$]*"
+    if not isinstance(value, str) or not re.fullmatch(pattern, value):
+        raise ValueError(f"Unsafe identifier for source introspection: {value!r}")
+    return value
+
+
+def _schema_filter(options: SourceGenerationOptions) -> str:
+    if not options.exclude_schemas:
+        return "1=1"
+    values = ",".join(f"'{_safe_sql_literal_value(name)}'" for name in options.exclude_schemas)
+    return f"schema_name NOT IN ({values})"
 
 
 class SourceGenerationStrategy(str, Enum):
@@ -91,6 +117,7 @@ class SourceGenerator:
 
         Args:
             project: The DbtProject instance to use for database access.
+
         """
         self.project = project
         self.adapter = project.adapter
@@ -106,6 +133,7 @@ class SourceGenerator:
 
         Returns:
             List of generated SourceDefinition objects.
+
         """
         options = options or SourceGenerationOptions()
 
@@ -213,39 +241,40 @@ class SourceGenerator:
         sql = """
             SELECT schema_name
             FROM information_schema.schemata
-            WHERE schema_name NOT IN (%s)
+            WHERE %s
             ORDER BY schema_name
         """
-        exclude = ",".join(f"'{s}'" for s in options.exclude_schemas)
-        sql = sql % exclude
+        sql = sql % _schema_filter(options)
 
-        result = self.project.execute_sql(sql)
+        result = self.project.execute_sql(sql, compile=False)
         schemas = [str(row[0]) for row in result.table.rows]
         return schemas
 
     def _get_bigquery_datasets(self, options: SourceGenerationOptions) -> list[str]:
         """Get datasets for BigQuery."""
-        project_id = self.credentials.database or self.credentials.schema
+        project_id = _safe_sql_identifier(
+            self.credentials.database or self.credentials.schema, allow_hyphen=True
+        )
         sql = f"""
             SELECT schema_name
             FROM `{project_id}.INFORMATION_SCHEMA.SCHEMATA`
-            WHERE schema_name NOT IN ({",".join(f"'{s}'" for s in options.exclude_schemas)})
+            WHERE {_schema_filter(options)}
             ORDER BY schema_name
         """
-        result = self.project.execute_sql(sql)
+        result = self.project.execute_sql(sql, compile=False)
         schemas = [str(row[0]) for row in result.table.rows]
         return schemas
 
     def _get_snowflake_schemas(self, options: SourceGenerationOptions) -> list[str]:
         """Get schemas for Snowflake."""
-        database = self.credentials.database
+        database = _safe_sql_identifier(self.credentials.database)
         sql = f"""
             SELECT schema_name
             FROM {database}.INFORMATION_SCHEMA.SCHEMATA
-            WHERE schema_name NOT IN ({",".join(f"'{s}'" for s in options.exclude_schemas)})
+            WHERE {_schema_filter(options)}
             ORDER BY schema_name
         """
-        result = self.project.execute_sql(sql)
+        result = self.project.execute_sql(sql, compile=False)
         schemas = [str(row[0]) for row in result.table.rows]
         return schemas
 
@@ -258,12 +287,11 @@ class SourceGenerator:
         sql = """
             SELECT schema_name
             FROM information_schema.schemata
-            WHERE schema_name NOT IN (%s)
+            WHERE %s
             ORDER BY schema_name
         """
-        exclude = ",".join(f"'{s}'" for s in options.exclude_schemas)
-        sql = sql % exclude
-        result = self.project.execute_sql(sql)
+        sql = sql % _schema_filter(options)
+        result = self.project.execute_sql(sql, compile=False)
         schemas = [str(row[0]) for row in result.table.rows]
         return schemas
 
@@ -272,12 +300,11 @@ class SourceGenerator:
         sql = """
             SELECT schema_name
             FROM information_schema.schemata
-            WHERE schema_name NOT IN (%s)
+            WHERE %s
             ORDER BY schema_name
         """
-        exclude = ",".join(f"'{s}'" for s in options.exclude_schemas)
-        sql = sql % exclude
-        result = self.project.execute_sql(sql)
+        sql = sql % _schema_filter(options)
+        result = self.project.execute_sql(sql, compile=False)
         schemas = [str(row[0]) for row in result.table.rows]
         return schemas
 
@@ -286,13 +313,12 @@ class SourceGenerator:
         sql = """
             SELECT schema_name
             FROM information_schema.schemata
-            WHERE schema_name NOT IN (%s)
+            WHERE %s
             ORDER BY schema_name
         """
-        exclude = ",".join(f"'{s}'" for s in options.exclude_schemas)
-        sql = sql % exclude
+        sql = sql % _schema_filter(options)
         try:
-            result = self.project.execute_sql(sql)
+            result = self.project.execute_sql(sql, compile=False)
             return [str(row[0]) for row in result.table.rows]
         except Exception:
             # Fallback: just use the configured schema
@@ -307,7 +333,7 @@ class SourceGenerator:
 
         # Get table names
         tables_sql = self._get_tables_sql(schema, database, adapter_type)
-        result = self.project.execute_sql(tables_sql)
+        result = self.project.execute_sql(tables_sql, compile=False)
         table_names = [str(row[0]) for row in result.table.rows]
 
         # Filter excluded tables
@@ -325,6 +351,11 @@ class SourceGenerator:
 
     def _get_tables_sql(self, schema: str, database: str, adapter_type: str) -> str:
         """Get SQL to list tables in a schema."""
+        schema = _safe_sql_literal_value(schema)
+        if adapter_type in {"bigquery", "snowflake"}:
+            database = _safe_sql_identifier(database, allow_hyphen=adapter_type == "bigquery")
+        if adapter_type == "bigquery":
+            schema = _safe_sql_identifier(schema, allow_hyphen=True)
         if adapter_type == "postgres":
             return f"""
                 SELECT table_name
@@ -420,7 +451,7 @@ class SourceGenerator:
         adapter_type = self.credentials.type
         columns_sql = self._get_columns_sql(schema, table_name, adapter_type)
 
-        result = self.project.execute_sql(columns_sql)
+        result = self.project.execute_sql(columns_sql, compile=False)
         columns = []
 
         for row in result.table.rows:
@@ -450,18 +481,22 @@ class SourceGenerator:
 
     def _get_columns_sql(self, schema: str, table_name: str, adapter_type: str) -> str:
         """Get SQL to list columns in a table."""
+        schema = _safe_sql_literal_value(schema)
+        table_name = _safe_sql_literal_value(table_name)
         if adapter_type == "bigquery":
+            database = _safe_sql_identifier(self.credentials.database or schema, allow_hyphen=True)
+            schema = _safe_sql_identifier(schema, allow_hyphen=True)
             return f"""
                 SELECT
                     column_name,
                     data_type,
                     is_nullable
-                FROM `{self.credentials.database or schema}.{schema}.INFORMATION_SCHEMA.COLUMNS`
+                FROM `{database}.{schema}.INFORMATION_SCHEMA.COLUMNS`
                 WHERE table_name = '{table_name}'
                 ORDER BY ordinal_position
             """
         elif adapter_type == "snowflake":
-            database = self.credentials.database or ""
+            database = _safe_sql_identifier(self.credentials.database or "")
             return f"""
                 SELECT
                     column_name,
@@ -548,74 +583,66 @@ def to_yaml(source_defs: list[SourceDefinition], quote_identifiers: bool = False
 
     Returns:
         YAML string representation of the sources.
+
     """
-    lines = []
+    if not source_defs:
+        return ""
 
+    class QuotedIdentifier(str):
+        pass
+
+    class SourceDumper(yaml.SafeDumper):
+        pass
+
+    SourceDumper.add_representer(
+        QuotedIdentifier,
+        lambda dumper, value: dumper.represent_scalar("tag:yaml.org,2002:str", value, style='"'),
+    )
+
+    def identifier(value: str) -> str:
+        return QuotedIdentifier(value) if quote_identifiers else value
+
+    def common_fields(item: t.Any) -> dict[str, t.Any]:
+        fields: dict[str, t.Any] = {}
+        if item.description:
+            fields["description"] = item.description
+        if item.tags:
+            fields["tags"] = item.tags
+        if item.meta:
+            fields["meta"] = item.meta
+        return fields
+
+    sources: list[dict[str, t.Any]] = []
     for source_def in source_defs:
-        quote = '"' if quote_identifiers else ""
-
-        lines.append(f"version: 2")
-        lines.append(f"")
-        lines.append(f"sources:")
-        lines.append(f"  - name: {source_def.source_name}")
-
-        if source_def.description:
-            lines.append(f'    description: "{source_def.description}"')
-
-        lines.append(f"    {quote}database{quote}: {quote}{source_def.database}{quote}")
-        lines.append(f"    {quote}schema{quote}: {quote}{source_def.schema}{quote}")
-
-        if source_def.tags:
-            lines.append(f"    tags:")
-            for tag in source_def.tags:
-                lines.append(f"      - {tag}")
-
-        if source_def.meta:
-            lines.append(f"    meta:")
-            for key, value in source_def.meta.items():
-                lines.append(f"      {key}: {value}")
-
-        lines.append(f"    tables:")
-
+        source: dict[str, t.Any] = {
+            "name": source_def.source_name,
+            "database": identifier(source_def.database),
+            "schema": identifier(source_def.schema),
+            **common_fields(source_def),
+            "tables": [],
+        }
         for table in source_def.tables:
-            lines.append(f"      - name: {quote}{table.name}{quote}")
-
-            if table.description:
-                lines.append(f'        description: "{table.description}"')
-
-            if table.tags:
-                lines.append(f"        tags:")
-                for tag in table.tags:
-                    lines.append(f"          - {tag}")
-
-            if table.meta:
-                lines.append(f"        meta:")
-                for key, value in table.meta.items():
-                    lines.append(f"          {key}: {value}")
-
-            lines.append(f"        columns:")
-
+            table_data: dict[str, t.Any] = {
+                "name": identifier(table.name),
+                **common_fields(table),
+                "columns": [],
+            }
             for column in table.columns:
-                lines.append(f"          - name: {quote}{column.name}{quote}")
-
-                if column.description:
-                    lines.append(f'            description: "{column.description}"')
-
-                lines.append(f"            data_type: {column.data_type}")
-
-                if column.tags:
-                    lines.append(f"            tags:")
-                    for tag in column.tags:
-                        lines.append(f"              - {tag}")
-
-                if column.meta:
-                    lines.append(f"            meta:")
-                    for key, value in column.meta.items():
-                        lines.append(f"              {key}: {value}")
-
-        lines.append("")
-
-    return "\n".join(lines)
+                table_data["columns"].append(
+                    {
+                        "name": identifier(column.name),
+                        "data_type": column.data_type,
+                        **common_fields(column),
+                    }
+                )
+            source["tables"].append(table_data)
+        sources.append(source)
+    return yaml.dump(
+        {"version": 2, "sources": sources},
+        Dumper=SourceDumper,
+        sort_keys=False,
+        allow_unicode=True,
+    )
 
 
 __all__ = [

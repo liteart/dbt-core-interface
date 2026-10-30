@@ -2,8 +2,6 @@
 # pyright: reportDeprecated=false,reportPrivateImportUsage=false,reportAny=false,reportUnknownMemberType=false,reportUnknownVariableType=false
 """Tests for the naming convention enforcer module."""
 
-import pytest
-
 from dbt_core_interface.naming_enforcer import (
     LayerPattern,
     ModelLayer,

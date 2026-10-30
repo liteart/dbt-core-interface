@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from threading import Thread
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

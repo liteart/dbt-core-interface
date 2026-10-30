@@ -6,6 +6,7 @@ and thus should not change in a backwards incompatible way. Create a versioned A
 v2 server.py if we ever want/need to change the interface.
 """
 
+import ipaddress
 import json
 import logging
 import os
@@ -18,6 +19,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import (
     BackgroundTasks,
@@ -30,16 +32,17 @@ from fastapi import (
     Response,
 )
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from dbt_core_interface.container import DbtProjectContainer
 from dbt_core_interface.doc_checker import (
-    DocumentationChecker,
-    DocumentationReport,
+    DocumentationChecker,  # noqa: F401 - retained for public import compatibility
+    DocumentationReport,  # noqa: F401 - retained for public import compatibility
     GapSeverity,
     GapType,
 )
-from dbt_core_interface.performance_profiler import (
+from dbt_core_interface.performance_profiler import (  # noqa: F401 - retained for compatibility
     OptimizationSuggestion,
     PerformanceMetric,
     PerformanceProfiler,
@@ -224,6 +227,46 @@ app = FastAPI(
     version="1.0",
     lifespan=lifespan,
 )
+
+
+def _trusted_browser_origin(request: Request) -> bool:
+    """Reject unsolicited browser origins while preserving non-browser clients."""
+    origin = request.headers.get("origin")
+    if not origin:
+        return request.headers.get("sec-fetch-site", "").lower() != "cross-site"
+
+    configured = {
+        item.strip()
+        for item in os.getenv("DBT_CORE_INTERFACE_ALLOWED_ORIGINS", "").split(",")
+        if item.strip()
+    }
+    if origin in configured:
+        return True
+
+    try:
+        parsed = urlsplit(origin)
+        hostname = (parsed.hostname or "").lower()
+        try:
+            loopback = ipaddress.ip_address(hostname).is_loopback
+        except ValueError:
+            loopback = hostname == "localhost"
+        return bool(
+            loopback
+            and parsed.scheme in {"http", "https"}
+            and origin == f"{request.url.scheme}://{request.url.netloc}"
+        )
+    except ValueError:
+        return False
+
+
+@app.middleware("http")
+async def protect_browser_requests(
+    request: Request, call_next: t.Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Block cross-site browser requests; this does not authenticate clients."""
+    if not _trusted_browser_origin(request):
+        return JSONResponse({"detail": "Browser origin is not allowed"}, status_code=403)
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -1176,7 +1219,7 @@ def generate_test_yml(
 class SourceGenerationRequest(BaseModel):
     """Request model for source generation."""
 
-    schema: str | None = None
+    schema_name: str | None = Field(default=None, alias="schema")
     tables: list[str] = []
     source_name: str = "raw"
     strategy: str = "specific_schema"
@@ -1206,7 +1249,7 @@ def generate_sources(
         # Override with query params if body not provided
         if not request:
             if schema:
-                req_data.schema = schema
+                req_data.schema_name = schema
             if tables:
                 req_data.tables = [t.strip() for t in tables.split(",")]
             if source_name:
@@ -1215,7 +1258,7 @@ def generate_sources(
                 req_data.strategy = strategy
 
         yml = runner.generate_sources(
-            schema=req_data.schema,
+            schema=req_data.schema_name,
             tables=req_data.tables if req_data.tables else None,
             source_name=req_data.source_name,
             strategy=req_data.strategy,
@@ -1517,7 +1560,7 @@ def record_performance_metric(
     bytes_processed: int = Body(0, description="Bytes processed"),
     materialization: str = Body("table", description="Materialization type"),
     database: str = Body("", description="Database name"),
-    schema: str = Body("", description="Schema name"),
+    schema_name: str = Body("", alias="schema", description="Schema name"),
     runner: DbtProject = Depends(_get_runner),
 ) -> PerformanceMetricResult | ServerErrorContainer:
     """Manually record a performance metric for a model."""
@@ -1531,7 +1574,7 @@ def record_performance_metric(
             bytes_processed=bytes_processed,
             materialization=materialization,
             database=database,
-            schema=schema,
+            schema=schema_name,
         )
         return PerformanceMetricResult(result=metric.to_dict())
     except Exception as e:

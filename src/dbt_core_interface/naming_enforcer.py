@@ -271,7 +271,7 @@ class NamingEnforcer:
                         model_path=model_path,
                         layer=layer,
                         expected_pattern=pattern,
-                        violation_type=f"wrong_layer_pattern",
+                        violation_type="wrong_layer_pattern",
                         suggestion=f"Model is in {layer.value} directory but uses {wrong_layer.value} naming pattern. "
                         f"Consider renaming to: {pattern.get_expected_name(model_name)}",
                         severity="warning" if not pattern.required else "error",

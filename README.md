@@ -131,10 +131,22 @@ print(container.registered_projects())
 
 ### Server Mode (FastAPI)
 
-Run:
+The server has no built-in authentication and can execute SQL using the
+registered project's warehouse credentials. Bind it to localhost and use it
+only in a trusted local environment. Do not expose it to untrusted networks;
+remote deployments require independently configured authentication and network
+access controls.
+
+Browser requests from foreign origins and requests marked cross-site by modern
+browsers are rejected by default. A trusted browser origin can be explicitly
+allowed with `DBT_CORE_INTERFACE_ALLOWED_ORIGINS` as a comma-separated list of
+exact origins (including scheme and port). This check is not authentication:
+non-browser clients and local processes can omit browser headers.
+
+Run locally:
 
 ```bash
-python -m dbt_core_interface.server --host 0.0.0.0 --port 8581
+python -m dbt_core_interface.server --host 127.0.0.1 --port 8581
 ```
 
 Register a project:
@@ -163,15 +175,17 @@ client = DbtInterfaceClient(
     profiles_dir="/path/to/profiles.yml",
     target="dev",
     base_url="http://localhost:8581",
-    timeout=(5.0, 15.0)
+    timeout=(5.0, 15.0),
 )
 
 # Health & heartbeat
 print(client.health_check())  # {'status': 'ok', ...}
-print(client.heartbeat())     # {'alive': True, 'uptime': ...}
+print(client.heartbeat())  # {'alive': True, 'uptime': ...}
 
 # Run SQL with limit & path which allows resolving {{ this }}
-result = client.run_sql("SELECT * FROM {{ this }} ORDER BY id", limit=500, path="models/my_model.sql")
+result = client.run_sql(
+    "SELECT * FROM {{ this }} ORDER BY id", limit=500, path="models/my_model.sql"
+)
 print(result.table.rows)
 
 # Compile without execution
@@ -214,7 +228,7 @@ monitor.add_check(
         min_rows=1,
         max_rows=1000000,
         severity=Severity.ERROR,
-    )
+    ),
 )
 
 monitor.add_check(
@@ -224,7 +238,7 @@ monitor.add_check(
         column_name="id",
         max_null_percentage=0.0,
         severity=Severity.CRITICAL,
-    )
+    ),
 )
 
 # Add alert channels

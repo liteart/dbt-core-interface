@@ -16,9 +16,9 @@ import time
 import threading
 import typing as t
 import uuid
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from functools import lru_cache
+from dataclasses import dataclass, field  # noqa: F401 - retained for compatibility
+from datetime import datetime, timezone  # noqa: F401 - retained for compatibility
+from functools import lru_cache  # noqa: F401 - retained for compatibility
 from pathlib import Path
 
 if t.TYPE_CHECKING:
@@ -134,6 +134,7 @@ class PerformanceProfiler:
             storage_path: Path to store performance data (defaults to ~/.dbt_core_interface/performance.db)
             slow_threshold_ms: Threshold in milliseconds for considering a model "slow"
             history_days: Number of days to keep performance history
+
         """
         if storage_path is None:
             storage_path = Path.home() / ".dbt_core_interface" / "performance.db"
@@ -241,6 +242,7 @@ class PerformanceProfiler:
 
         Returns:
             The recorded PerformanceMetric
+
         """
         timestamp = time.time()
         metric = PerformanceMetric(
@@ -310,6 +312,7 @@ class PerformanceProfiler:
 
         Returns:
             The recorded PerformanceMetric
+
         """
         # Extract timing from adapter response
         execution_time_ms = (
@@ -349,6 +352,7 @@ class PerformanceProfiler:
 
         Returns:
             List of PerformanceSummary for slow models
+
         """
         threshold = threshold_ms or self._slow_threshold_ms
 
@@ -428,6 +432,7 @@ class PerformanceProfiler:
 
         Returns:
             PerformanceSummary or None if no data found
+
         """
         if self._conn is None:
             return None
@@ -511,6 +516,7 @@ class PerformanceProfiler:
 
         Returns:
             List of PerformanceMetric
+
         """
         if self._conn is None:
             return []
@@ -570,6 +576,7 @@ class PerformanceProfiler:
 
         Returns:
             Percentile value
+
         """
         if not data:
             return 0.0
@@ -597,6 +604,7 @@ class PerformanceProfiler:
 
         Returns:
             List of OptimizationSuggestion
+
         """
         suggestions: list[OptimizationSuggestion] = []
         slow_models = self.get_slow_models(limit=50, threshold_ms=threshold_ms)
@@ -699,6 +707,7 @@ class PerformanceProfiler:
             format: Export format ('json' or 'csv')
             model_name: Optional model name filter
             days: Number of days to include
+
         """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -755,6 +764,7 @@ class PerformanceProfiler:
 
         Returns:
             Dictionary with profiler stats
+
         """
         if self._conn is None:
             return {}

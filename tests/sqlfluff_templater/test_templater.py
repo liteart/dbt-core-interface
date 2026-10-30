@@ -199,7 +199,8 @@ def test__templater_dbt_templating_test_lex(
 )
 def test__dbt_templated_models_do_not_raise_lint_error(project_dir: str, fname: str) -> None:  # noqa: F811
     """Test that templated dbt models do not raise a linting error."""
-    lntr = Linter(config=FluffConfig(configs=DBT_FLUFF_CONFIG))
+    # The fixture intentionally uses SELECT *; SQLFluff 4 reports AM04 for it.
+    lntr = Linter(config=FluffConfig(configs=DBT_FLUFF_CONFIG, overrides={"exclude_rules": "AM04"}))
     lnt = lntr.lint_path(path=os.path.join(project_dir, "models/my_new_project/", fname))
     violations = t.cast(list[t.Any], lnt.check_tuples())
     assert len(violations) == 0

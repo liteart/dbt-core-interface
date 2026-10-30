@@ -1,23 +1,14 @@
 """Tests for the client module."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
 import requests
 
 from dbt_core_interface.client import DbtInterfaceClient, ServerErrorException
 from dbt_core_interface.server import (
     ServerErrorCode,
     ServerError,
-    ServerErrorContainer,
-    ServerRegisterResult,
-    ServerUnregisterResult,
-    ServerRunResult,
-    ServerCompileResult,
-    ServerLintResult,
-    ServerFormatResult,
-    ServerResetResult,
 )
 
 
@@ -200,13 +191,12 @@ class TestDbtInterfaceClientContextManager:
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "added": "test",
-            "projects": ["/path"],
             "removed": "test",
             "projects": [],
         }
         mock_session.request.return_value = mock_response
 
-        with DbtInterfaceClient(project_dir="/path") as client:
+        with DbtInterfaceClient(project_dir="/path"):
             pass
 
         mock_session.close.assert_called_once()
